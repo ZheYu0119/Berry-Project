@@ -1,0 +1,322 @@
+--
+title: "strawberries"
+author: "Yu"
+date: "2020/10/14"
+output: pdf_document
+---
+
+```{r setup, include=FALSE, warning=FALSE, message=FALSE}
+library(knitr)
+library(tidyverse)
+library(magrittr)
+library(kableExtra)
+
+opts_chunk$set(echo = FALSE, 
+               warning = FALSE,
+               message = FALSE)
+```
+
+## Raspberries
+
+```{r}
+sberry <- ag_data %>% filter((Commodity=="STRAWBERRIES") & (Period=="YEAR"))
+sberry %<>% select(-c(Period, Commodity))   
+
+#### Does every Data Item begin with "
+sum(str_detect(sberry$`Data Item`, "^STRAWBERRIES, ")) == length(sberry$`Data Item`)
+
+sberry$`Data Item` <- str_replace(sberry$`Data Item`,"^STRAWBERRIES","STRAWBERRIES#")
+sberry$`Data Item` <- str_replace(sberry$`Data Item`,"MEASURED IN","#MEASURED IN")
+sberry %<>% separate(`Data Item`, c("B","type", "meas"), sep = "#") 
+sberry %<>% separate(type, c("type", "Production"), sep = " - ")
+sberry %<>% separate(type, c("d1", "Type"), sep = ",")
+sberry %<>% separate(Production, c("Production", "d2"), sep = ",")
+sberry %<>% separate(meas, c("Measures", "Avg"), sep = ", ")
+
+# di <- sberry$`Data Item`
+# di_m <- str_split(di, ",", simplify=TRUE)
+# dim(di_m)
+# 
+# unique(di_m[,1])
+# di_m <- di_m[,2:4]
+
+
+sberry %<>% select(-c(B,d1))
+sberry %<>% select(-d2)
+
+# head(sberry$type, n=20)
+# ty <- str_split(sberry$type, " ", simplify=TRUE)
+# head(ty, n=20)
+
+sberry[is.na(sberry)] <- " "  ## OK now Data Item has been split into parts
+
+## onto Domain
+
+```
+
+
+```{r}
+# sberry$Domain %>% unique()
+
+sberry %<>% separate(Domain, c("D_left", "D_right"), sep = ", ")
+
+# sberry$D_left %>% unique()
+# sberry$D_right %>% unique()
+
+sberry[is.na(sberry)] <- " "
+
+## And now Domain Category
+
+
+## sberry$`Domain Category` %>% unique()
+
+sberry %<>% separate(`Domain Category`, c("DC_left", "DC_right"), sep = ", ")
+
+## looks like DC_left combines labels
+
+head(sberry$DC_left %>% unique(),n=20)
+head(sberry$DC_right %>% unique(), n=20)
+
+
+## work on DC_left first
+
+sberry %<>% separate(DC_left, c("DC_left_l", "DC_left_r"), sep = ": ")
+
+## sberry$DC_left_l %>% unique()
+## sberry$DC_left_r %>% unique()
+
+## now work on DC_right
+
+head(sberry$DC_right %>% unique(), n=20)
+
+sberry %<>% separate(DC_right, c("DC_right_l", "DC_right_r"), sep = ": ") 
+
+
+sberry[is.na(sberry)] <- " "
+
+##  OK now we need to eliminate the redundancy
+```
+
+```{r}
+
+## fine and remove redundant columns
+ 
+## paste(sberry$D_left,sberry$DC_left_l) %>% unique
+## returns -- "TOTAL NOT SPECIFIED"   "CHEMICAL CHEMICAL"     "FERTILIZER FERTILIZER"
+
+## remove column sberry$DC_left_l
+
+
+sberry %<>%  select(-DC_left_l) 
+
+## test
+
+# sum(sberry$D_right == sberry$DC_right_l)
+# [1] 7419
+# > sberry$DC_left_r %>% unique()
+# [1] " "           "(NITROGEN)"  "(PHOSPHATE)" "(POTASH)"    "(SULFUR)"  
+
+## remove column DC_right_l
+
+sberry %<>% select(-DC_right_l)
+
+
+## Test for lab1, lab2
+
+# paste(sberry$lab1, sberry$lab2) %>% unique()
+# [1] "ACRES HARVESTED" "PRODUCTION  "    "YIELD  "         "   "             "APPLICATIONS  " 
+# [6] "TREATED  " 
+
+
+sberry %<>% mutate(label = paste(lab1,lab2)) 
+
+## test for necisity of "chemical" in col D_left
+
+
+# paste(sberry$D_left, sberry$D_right) %>% unique()
+# [1] "TOTAL  "              "CHEMICAL FUNGICIDE"   "CHEMICAL HERBICIDE"   "CHEMICAL INSECTICIDE"
+# [5] "CHEMICAL OTHER"       "FERTILIZER  "   
+
+
+## remove "Chemical" and joint the columns
+
+sberry %<>% mutate(D_left = "CHEMICAL", D_left = "") 
+
+
+
+sberry %<>% mutate(Chemical=paste(D_left, D_right)) 
+
+sberry %<>% select(-c(D_left, D_right)) 
+
+
+sberry %<>% select(Year, State, Type, Production, Measures,Avg, DC_left_r, DC_right_r, Chemical, Value )
+
+```
+
+
+```{r}
+
+###  Now the problem is that we have entries in both the "what" and "meas" columns
+##  that begin  "MEASURED IN"
+##  how many are there
+
+## in the column "what"
+cnt_1 <- str_detect(sberry$what, "MEASURED IN")
+sum(cnt_1)
+
+## in the column "meas"
+
+cnt_2 <- str_detect(sberry$meas, "MEASURED IN")
+sum(cnt_2)
+
+## We want to put them all in the same column
+## So, we will separate them from their current column and put them into
+## two columns -- then we will test to make sure there aren't any overlaps
+## and then merge the two columns
+
+## we're going to use PURRR.  We need a simple function that takes a logical
+## variable and a second variable.  It returns the second variable if the logical
+## variable is true and returns a blank if it is false
+
+
+f1 <- function(a,b){
+  if(a){
+    return(b)
+  }else{
+      return("")
+  }
+}
+#################################################
+##  try it
+
+f1(TRUE,"hi")
+
+f1(!TRUE, "hi")
+
+## now try it with map2()
+
+f1_log <- c(FALSE, TRUE, TRUE)
+f1_str <- c("one", "two", "three")
+
+map2(f1_log, f1_str, f1)
+
+#########################################################
+## now let's separate the "MEASURED IN" entries in the meas column
+## form an index of the entries to be separated out
+
+index_meas <- str_detect(sberry$meas, "MEASURED IN")
+
+## verify the first six values against the dats sberry
+head(index_meas)
+new <- map2(index_meas, sberry$meas, f1)
+new <- unlist(new)
+head(new, n=20)
+######################################################
+
+sberry %<>% mutate(m_in_1 = unlist(map2(index_meas, sberry$meas, f1))) 
+
+# 
+#
+# b_f <- sberry
+# 
+#  
+#  
+#  l1 <- "MEASURED IN LB"
+#  l2 <- "howdy"
+#  l3 <- "MEASURED IN LB / ACRE"
+# 
+#  str_replace(c(l1,l2,l3), "MEASURED IN.*$", "")
+# 
+# tmp <- str_replace(l4, "MEASURED IN.*$", "")
+# 
+# b_f %<>%  mutate(meas = str_replace(b_f$meas, "MEASURED IN.*$", "" ))
+# 
+# Check on whether it worked
+#
+# cnt_l <- str_detect(b_f$meas, "MEASURED IN")
+# sum(cnt_l)
+#
+
+sberry %<>% mutate(meas = str_replace(sberry$meas, "MEASURED IN.*$", ""))
+
+## Check
+cnt_3 <- str_detect(sberry$meas, "MEASURED IN")
+sum(cnt_3)
+
+
+#########################
+## Now we will do the same thing with the 
+## "what" column  
+
+### index of cells to be isolated
+index_what <- str_detect(sberry$what, "MEASURED IN")
+sum(index_what)
+
+### create a column of the isolated cells
+sberry %<>% mutate(m_in_2 = unlist(map2(index_what, sberry$what, f1))) 
+
+###  eliminate the isolated cells from the original column
+sberry %<>% mutate(what = str_replace(sberry$what, "MEASURED IN.*$", ""))
+
+### test that theere are no more "MEASURED IN" cells in the original column
+cnt_what <- str_detect(sberry$what, "MEASURED IN")
+sum(cnt_what)
+
+### Check for overlaps
+
+
+sberry %<>% mutate(units = str_trim(paste(m_in_1, m_in_2))) 
+
+sberry$units %>% unique()
+
+
+```
+
+
+
+
+```{r}
+
+## now let's clean it up 
+
+sberry$Avg %>% unique()  ## rename Avg
+
+sberry$meas %>% unique()  ## rename marketing
+
+sberry$label %>% unique() ## rename harvest 
+
+sberry$DC_left_r %>% unique() # rename chemical_family
+
+tmp <- sberry$DC_right_r %>% unique() # rename materials --213
+
+tmp <- sberry$Value %>% unique() # values
+
+tmp <- sberry$units %>% unique() # Measures
+
+
+
+sberry %<>% rename(Chem_family = DC_left_r, Materials = DC_right_r)
+
+colnames(sberry)
+
+sberry %<>% select(Year, State, type, Marketing, 
+                   Measures, Avg, Harvest, Chem_family,
+                   Materials, Chemical, Value )
+
+str_trim(paste(sberry$Marketing, sberry$Harvest)) %>% unique
+
+###  these belong in one column
+
+sberry %<>% mutate(production = str_trim(paste(Marketing, Harvest)))
+
+sberry %<>% select(Year, State, type, production, Measures,
+                   Avg, Chem_family, Materials, Chemical, Value)
+
+
+## I missed this one !!
+
+sberry %<>% mutate(Chemical = str_trim(paste(Chem_family, Chemical)))
+
+sberry %<>% select(Year, State, Type, Production, Avg, Measures, Materials, Chemical, Value)
+
+write.csv(sberry,"sberry.csv",row.names = F)

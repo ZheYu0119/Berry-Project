@@ -1,0 +1,332 @@
+---
+title: "Report Of Berry Assignments"
+author: "Zhe Yu"
+date: "2020/10/18"
+output: pdf_document
+---
+
+```{r setup, include=FALSE, warning=FALSE, message=FALSE}
+library(knitr)
+library(tidyverse)
+library(magrittr)
+library(kableExtra)
+library(gridExtra)
+
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, out.width = "70%", tidy = T, fig.align = "center")
+```
+
+```{r include=FALSE}
+## read the data
+ag_data <- read_csv("berries.csv", col_names = TRUE)
+## look at number of unique values in each column
+ag_data %>% summarize_all(n_distinct) -> aa
+## make a list of the columns with only one unique value
+bb <- which(aa[1,]==1)
+## list the 1-unique valu column names 
+cn <- colnames(ag_data)[bb]
+
+```
+
+```{r include=FALSE}
+## remove the 1-unique columns from the dataset
+ag_data %<>% select(-all_of(bb))
+aa %<>% select(-all_of(bb)) 
+
+## State name and the State ANSI code are (sort of) redundant
+## Just keep the name
+ag_data %<>% select(-4)
+aa %<>% select(-4) 
+```
+## Introduction
+
+In this berry assignment, I chose the data of raspberry to do cleaning, organizing and some EDA.I tried to find how years, states and chemicals used effected the value of raspberry. Also I find the correlation between different type of chemicals.
+
+## Clean data
+
+In this procedure, I selected all the data of raspberry from the raw data. And due to the messy information in column 'Data Item', 'Domain' and 'Domain Category', I tried to separate them into several independent columns. 
+
+
+```{r}
+## select the data of raspberry
+rberry <- ag_data %>% filter((Commodity=="RASPBERRIES") & (Period=="YEAR"))
+rberry %<>% select(-c(Period, Commodity))   
+
+## use '#' to separate 'Data Item' into three parts
+rberry$`Data Item` <- str_replace(rberry$`Data Item`,"^RASPBERRIES","RASPBERRIES#")
+rberry$`Data Item` <- str_replace(rberry$`Data Item`,"MEASURED IN","#MEASURED IN")
+rberry %<>% separate(`Data Item`, c("B","type", "meas"), sep = "#") 
+
+## tidy up each new column and continue to separate them 
+rberry %<>% separate(type, c("Type", "Production"), sep = " - ")
+rberry %<>% separate(Type, c("d1", "Type"), sep = ",")
+rberry %<>% separate(Production, c("Production", "d2"), sep = ",")
+rberry %<>% separate(meas, c("Measures", "Avg"), sep = ", ")
+
+## delete those columns with useless information
+rberry %<>% select(-c(B,d1,d2))
+rberry[is.na(rberry)] <- " "  ## OK now Data Item has been split into parts
+
+#kable(head(rberry,n=10)) %>% kable_styling(fixed_thead = T, font_size = 10)
+head(rberry,n=10)
+## onto Domain
+```
+
+
+```{r}
+##separate 'Domain' and 'Domain category'
+rberry %<>% separate(Domain, c("D_left", "D_right"), sep = ", ")
+rberry[is.na(rberry)] <- " "
+rberry %<>% separate(`Domain Category`, c("DC_left", "DC_right"), sep = ", ")
+
+## work on DC_left first
+
+rberry %<>% separate(DC_left, c("DC_left_l", "DC_left_r"), sep = ": ")
+
+## now work on DC_right
+rberry %<>% separate(DC_right, c("DC_right_l", "DC_right_r"), sep = ": ") 
+rberry[is.na(rberry)] <- " "
+
+#kable(head(rberry,n=10)) %>% kable_styling(fixed_thead = T, font_size = 10)
+head(rberry,n=10)
+##  OK now we need to eliminate the redundancy
+```
+
+```{r}
+
+## fine and remove redundant columns
+## remove column rberry$DC_left_l and DC_right_l
+
+rberry %<>%  select(-DC_left_l) 
+rberry %<>% select(-DC_right_l)
+
+## remove "Chemical" and joint the columns
+
+rberry %<>% mutate(D_left = "CHEMICAL", D_left = "") 
+rberry %<>% mutate(Chemical=paste(D_left, D_right)) 
+rberry %<>% select(-c(D_left, D_right)) 
+
+## select columns that want to reserve
+rberry %<>% select(Year, State, Type, Production, Measures,Avg, DC_left_r, DC_right_r, Chemical, Value )
+
+#kable(head(rberry,n=10)) %>% kable_styling(fixed_thead = T, font_size = 10)
+head(rberry,n=10)
+```
+
+
+```{r}
+## now let's clean it up 
+rberry %<>% rename(Chem_family = DC_left_r, Materials = DC_right_r)
+rberry %<>% mutate(Chemical = str_trim(paste(Chem_family, Chemical)))
+rberry %<>% select(Year, State, Type, Production, Avg, Measures, Materials, Chemical, Value)
+#kable(head(rberry,n=10)) %>% kable_styling(fixed_thead = T, font_size = 10)
+head(rberry,n=10)
+##write.csv(rberry,"rberry.csv",row.names = F)
+```
+
+## Organize data
+
+The data was cleaned up, because the majority of raspberry is for application, so I filter rows of data in the same situation to be prepared for the EDA part. 
+
+```{r}
+
+## look at chemicals being applied to food, and drop "(D)" and "(NA)"
+unfood <- rberry %<>% filter(Production=="APPLICATIONS") 
+unfood %<>% filter(Value != "(D)")
+unfood %<>% filter(Value !=  "(NA)")
+unfood %<>% filter(Measures == "MEASURED IN LB / ACRE / APPLICATION")
+unfood$Value <- as.numeric(unfood$Value)
+
+## just I mentioned before I select year, state, chemical and value, 
+## and make the dataframe more wider
+unfood_1 <- unfood %>%  select(Year, State, Chemical, Value)
+unfood_1$Value <- as.numeric(unfood_1$Value)
+unfood_1 %<>% pivot_wider(names_from = Chemical, values_from = Value)
+
+## because the using the pivot_wider so some data was a list,
+## I change them into sum
+for (i in 1:6) {
+  f <- as.numeric(unlist(unfood_1$INSECTICIDE[i]))
+  unfood_1$INSECTICIDE[i] <- sum(f)
+}
+for (i in 1:6) {
+  
+  f <- as.numeric(unlist(unfood_1$FUNGICIDE[i]))
+  unfood_1$FUNGICIDE[i] <- sum(f)
+}
+for (i in 1:6) {
+  f <- as.numeric(unlist(unfood_1$HERBICIDE[i]))
+  unfood_1$HERBICIDE[i] <- sum(f)
+}
+for (i in 1:6) {
+  f <- as.numeric(unlist(unfood_1$OTHER[i]))
+  unfood_1$OTHER[i] <- sum(f)
+}
+for (i in 1:6) {
+  f <- as.numeric(unlist(unfood_1$`(NITROGEN)`[i]))
+  unfood_1$`(NITROGEN)`[i] <- sum(f)
+}
+for (i in 1:6) {
+  f <- as.numeric(unlist(unfood_1$`(PHOSPHATE)`[i]))
+  unfood_1$`(PHOSPHATE)`[i] <- sum(f)
+}
+for (i in 1:6) {
+  f <- as.numeric(unlist(unfood_1$`(POTASH)`[i]))
+  unfood_1$`(POTASH)`[i] <- sum(f)
+}
+
+unfood_1$FUNGICIDE <- as.numeric(unfood_1$FUNGICIDE)
+unfood_1$INSECTICIDE <- as.numeric(unfood_1$INSECTICIDE)
+unfood_1$HERBICIDE <- as.numeric(unfood_1$HERBICIDE)
+unfood_1$OTHER <- as.numeric(unfood_1$OTHER)
+unfood_1$`(NITROGEN)` <- as.numeric(unfood_1$`(NITROGEN)`)
+unfood_1$`(PHOSPHATE)` <- as.numeric(unfood_1$`(PHOSPHATE)`)
+unfood_1$`(POTASH)` <- as.numeric(unfood_1$`(POTASH)`)
+
+#kable(head(rberry,n=10)) %>% kable_styling(fixed_thead = T, font_size = 10)
+head(rberry,n=10)
+```
+## EDA
+
+### Chemical type and Value
+
+At first I want to draw the boxplot to see the distribution of value by using different type of chemical, but the range of different chemical is not the same. And also there are outliers that make the plot not useful, so I make some adjustment and create another plot.
+
+```{r echo=FALSE}
+unfood$Chemicaltype <- ifelse(unfood$Chemical=="(NITROGEN)"|unfood$Chemical=="(PHOSPHATE)"|unfood$Chemical=="(POTASH)","FERTILIAZER","AGENTIA")
+
+unfood %<>% mutate(Variables = str_trim(paste(Year, State)))
+ggplot(unfood,mapping=aes(x=Chemical,y=Value))+geom_boxplot()+
+  theme(axis.text.x = element_text(angle = 60, hjust = 1),
+        axis.text = element_text(size = 10),
+        axis.title = element_text(size = 13, face = "bold")) +
+  labs(x = "Chemical type")
+```
+so I seperate the chemical into to part: agentia and fertilizer. I create an indicate to distinguish them. Two part are drawed separately, but I use grid.arrange function to combine them into same plot. It is clear that the value of raspberry using fertilizer('nitrogen', 'phosphate' and 'potash') is much higher than those using agentia('fungicide', 'herbicide', 'insecticide' and 'other')(becasue 'other' also have a small range so I put it in the agentia). 
+
+```{r echo=FALSE}
+unfood_2 <- filter(unfood,Chemical=="(NITROGEN)"|Chemical=="(PHOSPHATE)"|Chemical=="(POTASH)")
+ctype1 <- ggplot(unfood_2,mapping=aes(x=Chemical,y=Value))+
+  geom_boxplot()+
+  theme(axis.text.x = element_text(angle = 60, hjust = 1),
+        axis.text = element_text(size = 10),
+        axis.title = element_text(size = 13, face = "bold")) +
+  labs(x = "Fertilizer")
+unfood_3 <- filter(unfood,Chemical=="FUNGICIDE"|Chemical=="HERBICIDE"|Chemical=="INSECTICIDE"|Chemical=="OTHER")
+ctype2 <- ggplot(unfood_3,mapping=aes(x=Chemical,y=Value))+
+  geom_boxplot()+
+  theme(axis.text.x = element_text(angle = 60, hjust = 1),
+        axis.text = element_text(size = 10),
+        axis.title = element_text(size = 13, face = "bold")) +
+  coord_cartesian(ylim = c(0,2))+
+  labs(x = "Agentia")
+grid.arrange(ctype1,ctype2,nrow=1)
+```
+And also can see those outliers here.
+```{r echo=FALSE}
+outlier <- filter(unfood,unfood$Chemical=="FUNGICIDE"&unfood$Value>2)
+head(outlier, n=10)
+```
+
+### state and value
+
+Look at 2015, the median of value of Oregon and Washington was much the same, around 0.26, but the value of Washington was closer. In 2017, the median of value in Oregon is almost two times of that in Washington. In 2019, there was no obvious difference between the situation of California and Washington.
+```{r echo=FALSE}
+ggplot(unfood,mapping=aes(x=State,y=Value))+geom_boxplot()+
+  theme(axis.text.x = element_text(angle = 60, hjust = 1),
+        axis.text = element_text(size = 10),
+        axis.title = element_text(size = 13, face = "bold")) +
+  labs(x = "State")+
+  coord_cartesian(ylim = c(0,2))+
+  facet_wrap(.~Year,scales = "free")
+```
+
+### Year and Value
+
+The dataset only have one year of value in California so there is no much to discuss. It seems that Oregon improves a lot from 2015 to 2017, for the median of value in 2017 is almost two times of that in 2015. And the value is closer as well. The same with Oregon, Washington also decreas the range of value, but there was not increasing in median, and even the median decreased in each year.
+```{r echo=FALSE}
+unfood$Year <- as.character(unfood$Year)
+ggplot(unfood,mapping=aes(x=Year,y=Value))+geom_boxplot()+
+  theme(axis.text.x = element_text(angle = 60, hjust = 1),
+        axis.text = element_text(size = 10),
+        axis.title = element_text(size = 13, face = "bold")) +
+  labs(x = "Year")+
+  coord_cartesian(ylim = c(0,2))+
+  facet_wrap(.~State,scales = "free")
+```
+
+### Correlations between chemical type.
+
+> Without going into too much detail, Principal Component Analysis (PCA) can thus be used to reduce the dimensions of the data into fewer components that would retain as much of the variability expressed by the original data as possible. The fewer components would assist in describing the relationship between the original variables by projecting them onto a two-dimensional grid allowing for easier visualization from which similar types of chemical may be grouped together.
+
+```{r echo=FALSE, message=FALSE}
+unfood_1$FUNGICIDE <- as.numeric(unfood_1$FUNGICIDE)
+unfood_1$INSECTICIDE <- as.numeric(unfood_1$INSECTICIDE)
+unfood_1$HERBICIDE <- as.numeric(unfood_1$HERBICIDE)
+unfood_1$OTHER <- as.numeric(unfood_1$OTHER)
+unfood_1$`(NITROGEN)` <- as.numeric(unfood_1$`(NITROGEN)`)
+unfood_1$`(PHOSPHATE)` <- as.numeric(unfood_1$`(PHOSPHATE)`)
+unfood_1$`(POTASH)` <- as.numeric(unfood_1$`(POTASH)`)
+
+df <- unfood_1[,-c(1,2)]
+pca <- prcomp(df,center = T,scale. = T)
+
+
+pca2.1 <- pca
+pca2.1$rotation <- -pca2.1$rotation
+pca2.1$x <- -pca2.1$x
+
+summary(pca2.1)
+
+
+plot(pca, type="lines")
+```
+The PCA provides 6 components and 90% of the total variance is attributed to the first 4 components. See in plot above.
+
+```{r}
+biplot(pca2.1, scale = 0)
+```
+
+> And in the biplot I can see the relationship between each variables. The size of the angle between vectors determines the correlation of the variables, which is the desired indicator to achieve the objective for this analysis. A small angle indicates a strong positive correlation, 90 degrees represents no correlation and 180 degrees represents a negative correlation. 
+
+For example, Phosphate and potash is almost coincide; others and herbicide have negative correlation.
+
+```{r echo=FALSE}
+pc12 <- data.frame(pca2.1$rotation[, 1:2])
+pc12$type <- rownames(pc12)
+pt1 <- ggplot(pc12, aes(x = PC1, y = PC2))
+pt1 <- pt1 + geom_point(size = 3) +
+  geom_text(aes(label = type), vjust = 1) +
+  theme(axis.text = element_text(size = 11),
+        axis.title = element_text(size = 13, face = "bold"))
+```
+```{r echo=FALSE}
+set.seed(7)
+pc.km <- kmeans(pc12[, 1:2], 3, nstart = 100)
+# ggplot clusters
+pt.km <- ggplot(pc12, aes(x = PC1, y = PC2))
+pt.km <- pt.km + geom_point(aes(colour = factor(pc.km$cluster)), size = 3) +
+  scale_colour_manual(values = c("red", "blue", "green")) +
+  geom_text(aes(label =type), vjust = 1) +
+  theme(axis.text = element_text(size = 11),
+        axis.title = element_text(size = 13, face = "bold")) +
+  labs(colour = "Cluster")
+print(pt.km)
+```
+
+In this plot, it is clear that chemical can be separate into to three part, just I mentioned before, apart from 'other', fertilizer('nitrogen', 'phosphate' and 'potash') gathered as cluster1, and agentia('fungicide', 'herbicide', 'insecticide') gathered as cluster3.
+
+## Conclusion(What I learned)
+
+In this assignment, cleaning data is a big and important job for the data is a little bit messy in some columns. At first, I cannot understand meaning of each column, So I go to the website [USDA](https://quickstats.nass.usda.gov) to find more information. When cleaning the data, I have to be patient and careful enough, and know what I actually want. In the EDA part, I met lots of difficulties, such as how to put two plots with different scales together, how to use kable to show the dataframe without overflow and the plot is not what I expected, so on. Sometimes, I give up, but most of time I found the solution from textbook or the Internet. And I realized that the type of column is really important for plots(such as character, numeric etc). And I believe that next time I will be better!
+
+## Citation
+
+[1] [Exploratory data analysis into the relationship between different types of crime in London](https://towardsdatascience.com/exploratory-data-analysis-into-the-relationship-between-different-types-of-crime-in-london-20c328e193ff)    
+[2] [R for Data Science](https://r4ds.had.co.nz/)   
+[3] [tutorial for grid.arrange](https://www.it1352.com/792718.html)    
+[4] [dmorison/eda-relationships-between-crime-london](https://github.com/dmorison/eda-relationships-between-crime-london)    
+[5] [USDA](https://quickstats.nass.usda.gov)    
+
+
+
+
